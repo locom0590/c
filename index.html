@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="utf-8">
-    <title>Dual-Task Arrows - Micro-Movement VR</title>
+    <title>Dual-Task Arrows - Gyro Calibrated VR</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <style>
@@ -55,7 +55,10 @@
       let leftCursor, rightCursor;
       let targetX = 0, targetY = 0;
       let currentX = 0, currentY = 0;
-      const yumusatma = 0.15; 
+      const yumusatma = 0.2; // Yumuşatma artırılarak sarsıntılar elendi
+
+      // Klinik Kilit Mekanizması: Hasta merkeze dönmeden yeni seçim yapamaz
+      let hamleYapildi = false; 
 
       let audioCtx = null;
 
@@ -144,7 +147,7 @@
         rightCursor = leftCursor.clone();
         scene.add(rightCursor);
 
-        // SKOR VE GERI BILDIRIM KANVASLARI
+        // SKOR PANELI VE GERI BILDIRIMLER
         function createScoreTexture(skorDegeri) {
           let canvas = document.createElement('canvas');
           canvas.width = 256; canvas.height = 64;
@@ -188,6 +191,7 @@
         rightFeedbackMesh.position.set(0.06, 0, -2.5);
         scene.add(rightFeedbackMesh);
 
+        // PC Test Desteği
         window.addEventListener('mousemove', (e) => {
           targetX = ((e.clientX / window.innerWidth) * 2 - 1) * 2.2;
           targetY = (-(e.clientY / window.innerHeight) * 2 + 1) * 1.8;
@@ -225,10 +229,15 @@
         scene.add(mesh);
       }
 
+      // --- YATAY MOD İÇİN EN DOĞRU JİROSKOP HARİTALAMASI ---
       function handleOrientation(event) {
-        if (!event.gamma || !event.beta) return;
-        targetX = (event.gamma / 22) * 2.2; 
-        targetY = ((event.beta - 65) / 20) * 1.8;
+        if (event.gamma === null || event.beta === null) return;
+        
+        // Telefon yatay (landscape) durduğunda:
+        // Sol-Sağ hareketi 'beta' eksenine, Yukarı-Aşağı hareketi 'gamma' eksenine biner.
+        // Bu kilit sistemi eksen çakışmalarını (karmaşayı) tamamen engeller.
+        targetX = -(event.beta / 25) * 2.2; 
+        targetY = (event.gamma / 22) * 1.8;
       }
 
       function hacimliOkUret() {
@@ -236,6 +245,7 @@
           scene.remove(aktifOk);
           aktifOk = null;
         }
+        hamleYapildi = false; // Yeni ok geldiğinde kilidi aç
 
         const kuralTipi = Math.random() > 0.5 ? "mavi" : "turuncu";
         okRengi = kuralTipi === "mavi" ? 0x00D2FF : 0xFF9F43;
@@ -274,29 +284,43 @@
         scene.add(aktifOk);
       }
 
-      // --- YENİLENEN REHABİLİTASYON UYUMLU SEÇİM MOTORU ---
+      // --- KARARLI DURUM VE DENGE MOTORU ---
       function kontrolEt() {
+        if (!aktifOk) return;
+
+        // Hasta nötr merkeze döndüyse kilidi kaldır
+        if (Math.abs(currentX) < 0.25 && Math.abs(currentY) < 0.25) {
+          hamleYapildi = false;
+          return; 
+        }
+
+        // Eğer bu ok için zaten bir hamle algılandıysa işlem yapma (Sarsıntı koruması)
+        if (hamleYapildi) return;
+
         let clockYon = "";
         
-        // Eşik değerleri (Kutular X:1.8, Y:1.4'te olmasına rağmen, algılama X:0.5 ve Y:0.4'te başlar)
-        // Böylece hasta başını sadece hafifçe o yöne doğru büktüğünde hamle geçerli sayılır.
-        if (currentY > 0.45 && Math.abs(currentX) < 0.4) clockYon = "yukari";
-        else if (currentY < -0.45 && Math.abs(currentX) < 0.4) clockYon = "asagi";
-        else if (currentX < -0.55 && Math.abs(currentY) < 0.4) clockYon = "sol";
-        else if (currentX > 0.55 && Math.abs(currentY) < 0.4) clockYon = "sag";
+        // Güvenli Deadzone (Eşik) Ayarları: Titremeler merkeze hapsedildi
+        if (currentY > 0.55 && Math.abs(currentX) < 0.4) clockYon = "yukari";
+        else if (currentY < -0.55 && Math.abs(currentX) < 0.4) clockYon = "asagi";
+        else if (currentX < -0.65 && Math.abs(currentY) < 0.4) clockYon = "sol";
+        else if (currentX > 0.65 && Math.abs(currentY) < 0.4) clockYon = "sag";
 
-        if (clockYon === dogruYon) {
-          skor += 10;
-          guncelleSkorPaneli();
-          tetikleGeriBildirim("dogru");
-          oynatSes("dogru");
-          cevapGeriBildirimi(clockYon, 0x00FF66); 
-          hacimliOkUret();
-        } else if (clockYon !== "" && clockYon !== dogruYon) {
-          tetikleGeriBildirim("yanlis");
-          oynatSes("yanlis");
-          cevapGeriBildirimi(clockYon, 0xFF3333); 
-          hacimliOkUret();
+        if (clockYon !== "") {
+          hamleYapildi = true; // Kilit devreye girer
+
+          if (clockYon === dogruYon) {
+            skor += 10;
+            guncelleSkorPaneli();
+            tetikleGeriBildirim("dogru");
+            oynatSes("dogru");
+            cevapGeriBildirimi(clockYon, 0x00FF66); 
+            hacimliOkUret();
+          } else {
+            tetikleGeriBildirim("yanlis");
+            oynatSes("yanlis");
+            cevapGeriBildirimi(clockYon, 0xFF3333); 
+            hacimliOkUret();
+          }
         }
       }
 
@@ -315,7 +339,7 @@
         if (!oyunAktif) return;
         requestAnimationFrame(animate);
 
-        if (time - sonOkZamani > 6000 || !aktifOk) {
+        if (time - sonOkZamani > 7000 || !aktifOk) {
           hacimliOkUret();
           sonOkZamani = time;
         }
@@ -345,14 +369,14 @@
           kontrolEt();
         }
 
-        // Sol Göz Çizimi
+        // Sol Göz
         leftCursor.visible = true; rightCursor.visible = false;
         renderer.setScissor(0, 0, window.innerWidth / 2, window.innerHeight);
         renderer.setViewport(0, 0, window.innerWidth / 2, window.innerHeight);
         renderer.setScissorTest(true);
         renderer.render(scene, leftCamera);
 
-        // Sağ Göz Çizimi
+        // Sağ Göz
         leftCursor.visible = false; rightCursor.visible = true;
         renderer.setScissor(window.innerWidth / 2, 0, window.innerWidth / 2, window.innerHeight);
         renderer.setViewport(window.innerWidth / 2, 0, window.innerWidth / 2, window.innerHeight);
