@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="utf-8">
-    <title>Dual-Task Arrows - Return to Center VR</title>
+    <title>Dual-Task Arrows - 90 Degree Calibrated VR</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <style>
@@ -39,19 +39,19 @@
       let scene, renderer, leftCamera, rightCamera;
       let oyunAktif = false, aktifOk = null;
       let dogruYon = "", akissYonu = "", okRengi = "";
-      let okHizi = 0.0116; // Orijinal hızın 1/3'ü
+      let okHizi = 0.0116; 
       let sonOkZamani = 0;
 
-      // Gelişmiş Klinik Algoritma Değişkenleri
+      // Klinik Döngü Değişkenleri
       let skor = 0;
-      let hamleYapildi = false;      // Mevcut ok için seçim yapıldı mı kilidi
-      let merkezBekleniyor = false;  // Hastanın kafasını merkeze getirme zorunluluğu kilidi
+      let hamleYapildi = false;      
+      let merkezBekleniyor = false;  
       let okDogumZamani = 0;
-      const ANALIZ_SURESI = 450;     // Ok çıktıktan sonraki ilk 450ms jiroskop körleşir
+      const ANALIZ_SURESI = 450;     
 
       let targetX = 0, targetY = 0;
       let currentX = 0, currentY = 0;
-      const smoothing = 0.15; // Sarsıntı engelleyici yumuşatma katsayısı
+      const smoothing = 0.15; 
 
       let leftScoreText, rightScoreText;
       let leftFeedbackMesh, rightFeedbackMesh;
@@ -107,19 +107,16 @@
         const light = new THREE.DirectionalLight(0xffffff, 1.2);
         light.position.set(0, 4, 6); scene.add(light);
 
-        // Sabit Referans Hedefleri
         createTarget(0, 1.4, -3.5, "yukari");
         createTarget(0, -1.4, -3.5, "asagi");
         createTarget(-1.8, 0, -3.5, "sol");
         createTarget(1.8, 0, -3.5, "sag");
 
-        // Ortadaki Parlak İmleçler
         const cursorGeo = new THREE.RingGeometry(0.02, 0.035, 32);
         const cursorMat = new THREE.MeshBasicMaterial({ color: 0x00FFCC, side: THREE.DoubleSide });
         leftCursor = new THREE.Mesh(cursorGeo, cursorMat); scene.add(leftCursor);
         rightCursor = leftCursor.clone(); scene.add(rightCursor);
 
-        // Skor Tablosu Dokuları
         function createScoreTexture(skorDegeri) {
           let canvas = document.createElement('canvas'); canvas.width = 256; canvas.height = 64;
           let ctx = canvas.getContext('2d'); ctx.fillStyle = '#2C3E50'; ctx.fillRect(0, 0, 256, 64);
@@ -131,7 +128,6 @@
         leftScoreText.position.set(-0.06, 1.9, -3); scene.add(leftScoreText);
         rightScoreText = leftScoreText.clone(); rightScoreText.position.set(0.06, 1.9, -3); scene.add(rightScoreText);
 
-        // Onay/Hata Görsel Dokuları (✓ / ✗)
         function createFBTex(type) {
           let canvas = document.createElement('canvas'); canvas.width = 128; canvas.height = 128;
           let ctx = canvas.getContext('2d'); ctx.font = 'Bold 100px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -168,17 +164,21 @@
         scene.add(mesh);
       }
 
+      // --- MUTLAK 90 DERECE VR ORYANTASYON KALİBRASYONU ---
       function handleOrientation(e) {
         if (e.gamma === null || e.beta === null) return;
-        // Yatay kilit yerleşimi
-        targetX = -(e.beta / 25) * 2.2; 
+        
+        // Telefon gözlük içinde tam dikey (landscape modunda 90 derece dik) durur.
+        // Bu yüzden beta ekseninden 90 çıkararak tam karşıya bakışı 0 kabul ediyoruz.
+        let diklikAcisi = e.beta - 90; 
+
+        targetX = -(diklikAcisi / 25) * 2.2; 
         targetY = (e.gamma / 22) * 1.8;
       }
 
       function hacimliOkUret() {
         if (aktifOk) scene.remove(aktifOk);
         
-        // Ok üretildiği an kararsızlık kilitleri sıfırlanır
         hamleYapildi = false;
         okDogumZamani = performance.now();
 
@@ -204,30 +204,26 @@
         aktifOk.position.set(sX, sY, -3.2); scene.add(aktifOk);
       }
 
-      // --- KLİNİK YÖN VE SAKADİK MERKEZ MOTORU ---
       function kontrolEt() {
         if (!aktifOk) return;
 
-        // DÖNGÜ AŞAMASI 1: Hasta seçimini yaptıktan sonra kafasını büyük merkez çemberine getirmelidir
+        // 1. AŞAMA: Hasta kafasını geniş nötr çembere geri getirene kadar yeni ok üretme
         if (merkezBekleniyor) {
-          // Geniş merkez toleransı (X ve Y ekseninde 0.30 birimlik cömert sanal çember)
-          if (Math.abs(currentX) < 0.30 && Math.abs(currentY) < 0.30) {
-            merkezBekleniyor = false; // Kilit açıldı, artık bir sonraki ok üretilebilir
+          if (Math.abs(currentX) < 0.32 && Math.abs(currentY) < 0.32) {
+            merkezBekleniyor = false; 
             hacimliOkUret();
           }
-          return; // Merkez çemberine girilmediyse aşağıdaki kodları çalıştırma, yeni oka geçme
+          return; 
         }
 
-        // DÖNGÜ AŞAMASI 2: Ok yeni doğduysa ilk 450ms hastanın kuralı çözmesini bekle (Göz kırpma/Titreme koruması)
+        // 2. AŞAMA: Ok çıktıktan sonraki bilişsel analiz süresi (450ms) dolmadıysa hareketleri engelle
         if (performance.now() - okDogumZamani < ANALIZ_SURESI) return;
-
-        // Eğer bu ok için zaten karar verildiyse bekle
         if (hamleYapildi) return;
 
         let algilananYon = "";
-        const limitX = 0.65, limitY = 0.55; // Konforlu tetiklenme sınırları
+        const limitX = 0.65, limitY = 0.55; 
 
-        // Baskın eksen kontrolü
+        // Baskın eksen filtresi
         if (Math.abs(currentX) > limitX || Math.abs(currentY) > limitY) {
           if (Math.abs(currentX) > Math.abs(currentY)) {
             algilananYon = currentX > 0 ? "sag" : "sol";
@@ -236,10 +232,10 @@
           }
         }
 
-        // DÖNGÜ AŞAMASI 3: Bir yöne doğru net bir kafa hareketi yakalandığı an anında değerlendir
+        // 3. AŞAMA: Net kafa hareketi algılandığı an beklemeden tetikle
         if (algilananYon !== "") {
           hamleYapildi = true; 
-          merkezBekleniyor = true; // Merkeze dönüş zorunluluğunu aktif et
+          merkezBekleniyor = true; 
 
           if (algilananYon === dogruYon) {
             skor += 10; guncelleSkorPaneli();
@@ -272,7 +268,6 @@
         if (!oyunAktif) return;
         requestAnimationFrame(animate);
 
-        // Eğer hasta hiçbir şey yapmazsa ok otomatik olarak elenir (Zaman aşımı süresi artırıldı)
         if ((time - sonOkZamani > 8000 || !aktifOk) && !merkezBekleniyor) { 
           hacimliOkUret(); 
           sonOkZamani = time; 
@@ -289,7 +284,6 @@
           rightFeedbackMesh.material.opacity *= 0.85;
         }
 
-        // Eğer merkeze dönüş beklenmiyorsa oku yürüt (Seçim anında ok donar, karmaşayı engeller)
         if (aktifOk && !merkezBekleniyor) {
           if (akissYonu === "sol") aktifOk.position.x -= okHizi;
           if (akissYonu === "sag") aktifOk.position.x += okHizi;
@@ -298,17 +292,18 @@
 
           if (Math.abs(aktifOk.position.x) > 2.5 || Math.abs(aktifOk.position.y) > 1.8) {
             oynatSes("yanlis"); feedbackGoster("yanlis"); 
-            merkezBekleniyor = true; // Kaçırılan okta da kafayı ortaya getirmesini iste
+            merkezBekleniyor = true; 
           }
         }
         
         kontrolEt();
 
-        // Stereo Rendering
+        // Sol Göz
         renderer.setScissor(0, 0, window.innerWidth/2, window.innerHeight);
         renderer.setViewport(0, 0, window.innerWidth/2, window.innerHeight);
         renderer.setScissorTest(true); renderer.render(scene, leftCamera);
 
+        // Sağ Göz
         renderer.setScissor(window.innerWidth/2, 0, window.innerWidth/2, window.innerHeight);
         renderer.setViewport(window.innerWidth/2, 0, window.innerWidth/2, window.innerHeight);
         renderer.setScissorTest(true); renderer.render(scene, rightCamera);
