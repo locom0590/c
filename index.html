@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="utf-8">
-    <title>Dual-Task Arrows - Clinical Precision VR</title>
+    <title>Dual-Task Arrows - Return to Center VR</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <style>
@@ -39,19 +39,19 @@
       let scene, renderer, leftCamera, rightCamera;
       let oyunAktif = false, aktifOk = null;
       let dogruYon = "", akissYonu = "", okRengi = "";
-      let okHizi = 0.0116; // Orijinalin 1/3'ü
+      let okHizi = 0.0116; // Orijinal hızın 1/3'ü
       let sonOkZamani = 0;
 
-      // Klinik Algoritma Değişkenleri
+      // Gelişmiş Klinik Algoritma Değişkenleri
       let skor = 0;
-      let hamleKilitli = false;
-      let dwellStartTime = 0;
-      let sonAlgilananYon = "";
-      const DWELL_THRESHOLD = 400; // 400ms bekleme süresi
+      let hamleYapildi = false;      // Mevcut ok için seçim yapıldı mı kilidi
+      let merkezBekleniyor = false;  // Hastanın kafasını merkeze getirme zorunluluğu kilidi
+      let okDogumZamani = 0;
+      const ANALIZ_SURESI = 450;     // Ok çıktıktan sonraki ilk 450ms jiroskop körleşir
 
       let targetX = 0, targetY = 0;
       let currentX = 0, currentY = 0;
-      const smoothing = 0.12;
+      const smoothing = 0.15; // Sarsıntı engelleyici yumuşatma katsayısı
 
       let leftScoreText, rightScoreText;
       let leftFeedbackMesh, rightFeedbackMesh;
@@ -64,15 +64,17 @@
         let gain = audioCtx.createGain();
         osc.connect(gain); gain.connect(audioCtx.destination);
         if (tip === "dogru") {
-          osc.frequency.setValueAtTime(660, audioCtx.currentTime);
-          osc.frequency.exponentialRampToValueAtTime(880, audioCtx.currentTime + 0.1);
+          osc.frequency.setValueAtTime(587.33, audioCtx.currentTime);
+          osc.frequency.setValueAtTime(880, audioCtx.currentTime + 0.08);
           gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.25);
         } else {
-          osc.type = "square";
-          osc.frequency.setValueAtTime(110, audioCtx.currentTime);
-          gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+          osc.type = "sawtooth";
+          osc.frequency.setValueAtTime(120, audioCtx.currentTime);
+          gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
         }
-        osc.start(); osc.stop(audioCtx.currentTime + 0.2);
+        osc.start(); osc.stop(audioCtx.currentTime + 0.3);
       }
 
       function oyunuBaslat() {
@@ -102,25 +104,37 @@
         document.body.appendChild(renderer.domElement);
 
         scene.add(new THREE.AmbientLight(0x666666));
-        const light = new THREE.DirectionalLight(0xffffff, 1);
-        light.position.set(0, 5, 5); scene.add(light);
+        const light = new THREE.DirectionalLight(0xffffff, 1.2);
+        light.position.set(0, 4, 6); scene.add(light);
 
-        // Hedef Panelleri
+        // Sabit Referans Hedefleri
         createTarget(0, 1.4, -3.5, "yukari");
         createTarget(0, -1.4, -3.5, "asagi");
         createTarget(-1.8, 0, -3.5, "sol");
         createTarget(1.8, 0, -3.5, "sag");
 
-        // İmleçler
+        // Ortadaki Parlak İmleçler
         const cursorGeo = new THREE.RingGeometry(0.02, 0.035, 32);
         const cursorMat = new THREE.MeshBasicMaterial({ color: 0x00FFCC, side: THREE.DoubleSide });
         leftCursor = new THREE.Mesh(cursorGeo, cursorMat); scene.add(leftCursor);
         rightCursor = leftCursor.clone(); scene.add(rightCursor);
 
-        // Geri Bildirim Kaplamaları (✓ / ✗)
+        // Skor Tablosu Dokuları
+        function createScoreTexture(skorDegeri) {
+          let canvas = document.createElement('canvas'); canvas.width = 256; canvas.height = 64;
+          let ctx = canvas.getContext('2d'); ctx.fillStyle = '#2C3E50'; ctx.fillRect(0, 0, 256, 64);
+          ctx.fillStyle = '#FFFFFF'; ctx.font = 'Bold 32px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('SKOR: ' + skorDegeri, 128, 44);
+          return new THREE.CanvasTexture(canvas);
+        }
+        const scoreGeo = new THREE.PlaneGeometry(0.6, 0.15);
+        leftScoreText = new THREE.Mesh(scoreGeo, new THREE.MeshBasicMaterial({ map: createScoreTexture(0) }));
+        leftScoreText.position.set(-0.06, 1.9, -3); scene.add(leftScoreText);
+        rightScoreText = leftScoreText.clone(); rightScoreText.position.set(0.06, 1.9, -3); scene.add(rightScoreText);
+
+        // Onay/Hata Görsel Dokuları (✓ / ✗)
         function createFBTex(type) {
           let canvas = document.createElement('canvas'); canvas.width = 128; canvas.height = 128;
-          let ctx = canvas.getContext('2d'); ctx.font = 'Bold 90px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+          let ctx = canvas.getContext('2d'); ctx.font = 'Bold 100px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
           if(type==='ok'){ ctx.fillStyle='#2ECC71'; ctx.fillText('✓',64,64); } else { ctx.fillStyle='#E74C3C'; ctx.fillText('✗',64,64); }
           return new THREE.CanvasTexture(canvas);
         }
@@ -129,23 +143,45 @@
         leftFeedbackMesh = new THREE.Mesh(fbGeo, new THREE.MeshBasicMaterial({ map: this.texOk, transparent: true, opacity: 0 }));
         leftFeedbackMesh.position.set(-0.06, 0, -2.5); scene.add(leftFeedbackMesh);
         rightFeedbackMesh = leftFeedbackMesh.clone(); rightFeedbackMesh.position.set(0.06, 0, -2.5); scene.add(rightFeedbackMesh);
+
+        window.addEventListener('mousemove', (e) => {
+          targetX = ((e.clientX / window.innerWidth) * 2 - 1) * 2.2;
+          targetY = (-(e.clientY / window.innerHeight) * 2 + 1) * 1.8;
+        });
+      }
+
+      function guncelleSkorPaneli() {
+        function createScoreTexture(skorDegeri) {
+          let canvas = document.createElement('canvas'); canvas.width = 256; canvas.height = 64;
+          let ctx = canvas.getContext('2d'); ctx.fillStyle = '#2C3E50'; ctx.fillRect(0, 0, 256, 64);
+          ctx.fillStyle = '#FFFFFF'; ctx.font = 'Bold 32px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('SKOR: ' + skorDegeri, 128, 44);
+          return new THREE.CanvasTexture(canvas);
+        }
+        let yeniDoku = createScoreTexture(skor);
+        leftScoreText.material.map = yeniDoku; leftScoreText.material.needsUpdate = true;
+        rightScoreText.material.map = yeniDoku; rightScoreText.material.needsUpdate = true;
       }
 
       function createTarget(x, y, z, yon) {
-        const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.35, 0.1), new THREE.MeshLambertMaterial({ color: 0x7F8C8D }));
+        const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.35, 0.08), new THREE.MeshLambertMaterial({ color: 0x7F8C8D }));
         mesh.position.set(x, y, z); mesh.userData = { yon: yon, orijinalRenk: 0x7F8C8D };
         scene.add(mesh);
       }
 
       function handleOrientation(e) {
-        if (!e.alpha) return;
+        if (e.gamma === null || e.beta === null) return;
+        // Yatay kilit yerleşimi
         targetX = -(e.beta / 25) * 2.2; 
         targetY = (e.gamma / 22) * 1.8;
       }
 
       function hacimliOkUret() {
         if (aktifOk) scene.remove(aktifOk);
-        hamleKilitli = false;
+        
+        // Ok üretildiği an kararsızlık kilitleri sıfırlanır
+        hamleYapildi = false;
+        okDogumZamani = performance.now();
+
         const kural = Math.random() > 0.5 ? "mavi" : "turuncu";
         okRengi = kural === "mavi" ? 0x00D2FF : 0xFF9F43;
         const yonler = ["sol", "sag", "yukari", "asagi"];
@@ -154,7 +190,7 @@
         dogruYon = (kural === "mavi") ? akissYonu : ucYonu;
 
         aktifOk = new THREE.Group();
-        const mat = new THREE.MeshStandardMaterial({ color: okRengi });
+        const mat = new THREE.MeshStandardMaterial({ color: okRengi, roughness: 0.2, metalness: 0.1 });
         const g = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.45, 0.25), mat); g.position.y = -0.15; aktifOk.add(g);
         const u = new THREE.Mesh(new THREE.ConeGeometry(0.28, 0.35, 4), mat); u.position.y = 0.25; u.rotation.y = Math.PI/4; aktifOk.add(u);
         
@@ -168,51 +204,60 @@
         aktifOk.position.set(sX, sY, -3.2); scene.add(aktifOk);
       }
 
-      function kontrolEt(delta) {
-        if (!aktifOk || hamleKilitli) return;
+      // --- KLİNİK YÖN VE SAKADİK MERKEZ MOTORU ---
+      function kontrolEt() {
+        if (!aktifOk) return;
 
-        let algilananYon = "";
-        const limitX = 0.6, limitY = 0.5;
-
-        // BASKIN EKSEN ALGORİTMASI: X ve Y kıyaslanır, sadece güçlü olan yön seçilir
-        if (Math.abs(currentX) > limitX || Math.abs(currentY) > limitY) {
-            if (Math.abs(currentX) > Math.abs(currentY)) {
-                algilananYon = currentX > 0 ? "sag" : "sol";
-            } else {
-                algilananYon = currentY > 0 ? "yukari" : "asagi";
-            }
+        // DÖNGÜ AŞAMASI 1: Hasta seçimini yaptıktan sonra kafasını büyük merkez çemberine getirmelidir
+        if (merkezBekleniyor) {
+          // Geniş merkez toleransı (X ve Y ekseninde 0.30 birimlik cömert sanal çember)
+          if (Math.abs(currentX) < 0.30 && Math.abs(currentY) < 0.30) {
+            merkezBekleniyor = false; // Kilit açıldı, artık bir sonraki ok üretilebilir
+            hacimliOkUret();
+          }
+          return; // Merkez çemberine girilmediyse aşağıdaki kodları çalıştırma, yeni oka geçme
         }
 
-        // DWELL TIME (BEKLEME SÜRESİ) MOTORU
-        if (algilananYon !== "" && algilananYon === sonAlgilananYon) {
-            if (dwellStartTime === 0) dwellStartTime = performance.now();
-            let gecenSure = performance.now() - dwellStartTime;
+        // DÖNGÜ AŞAMASI 2: Ok yeni doğduysa ilk 450ms hastanın kuralı çözmesini bekle (Göz kırpma/Titreme koruması)
+        if (performance.now() - okDogumZamani < ANALIZ_SURESI) return;
 
-            // Seçim aşamasında görsel geri bildirim (Kutu parlaması)
-            hedefParla(algilananYon, true);
+        // Eğer bu ok için zaten karar verildiyse bekle
+        if (hamleYapildi) return;
 
-            if (gecenSure > DWELL_THRESHOLD) {
-                hamleKilitli = true;
-                if (algilananYon === dogruYon) {
-                    skor += 10; oynatSes("dogru"); feedbackGoster("dogru");
-                } else {
-                    oynatSes("yanlis"); feedbackGoster("yanlis");
-                }
-                hacimliOkUret();
-                dwellStartTime = 0;
-            }
-        } else {
-            hedefParla(sonAlgilananYon, false);
-            dwellStartTime = 0;
-            sonAlgilananYon = algilananYon;
+        let algilananYon = "";
+        const limitX = 0.65, limitY = 0.55; // Konforlu tetiklenme sınırları
+
+        // Baskın eksen kontrolü
+        if (Math.abs(currentX) > limitX || Math.abs(currentY) > limitY) {
+          if (Math.abs(currentX) > Math.abs(currentY)) {
+            algilananYon = currentX > 0 ? "sag" : "sol";
+          } else {
+            algilananYon = currentY > 0 ? "yukari" : "asagi";
+          }
+        }
+
+        // DÖNGÜ AŞAMASI 3: Bir yöne doğru net bir kafa hareketi yakalandığı an anında değerlendir
+        if (algilananYon !== "") {
+          hamleYapildi = true; 
+          merkezBekleniyor = true; // Merkeze dönüş zorunluluğunu aktif et
+
+          if (algilananYon === dogruYon) {
+            skor += 10; guncelleSkorPaneli();
+            oynatSes("dogru"); feedbackGoster("dogru");
+            cevapGeriBildirimi(algilananYon, 0x00FF66);
+          } else {
+            oynatSes("yanlis"); feedbackGoster("yanlis");
+            cevapGeriBildirimi(algilananYon, 0xFF3333);
+          }
         }
       }
 
-      function hedefParla(yon, durum) {
-        scene.traverse(obj => {
-            if(obj.userData && obj.userData.yon === yon) {
-                obj.material.color.setHex(durum ? 0x00FFCC : 0x7F8C8D);
-            }
+      function cevapGeriBildirimi(yon, renkKodu) {
+        scene.traverse((object) => {
+          if (object.userData && object.userData.yon === yon) {
+            object.material.color.setHex(renkKodu);
+            setTimeout(() => { object.material.color.setHex(object.userData.orijinalRenk); }, 300);
+          }
         });
       }
 
@@ -227,7 +272,11 @@
         if (!oyunAktif) return;
         requestAnimationFrame(animate);
 
-        if (time - sonOkZamani > 7500 || !aktifOk) { hacimliOkUret(); sonOkZamani = time; }
+        // Eğer hasta hiçbir şey yapmazsa ok otomatik olarak elenir (Zaman aşımı süresi artırıldı)
+        if ((time - sonOkZamani > 8000 || !aktifOk) && !merkezBekleniyor) { 
+          hacimliOkUret(); 
+          sonOkZamani = time; 
+        }
 
         currentX += (targetX - currentX) * smoothing;
         currentY += (targetY - currentY) * smoothing;
@@ -235,22 +284,25 @@
         leftCursor.position.set(currentX - 0.06, currentY, -2.8);
         rightCursor.position.set(currentX + 0.06, currentY, -2.8);
 
-        if (performance.now() - feedbackDisplayTime > 800) {
-          leftFeedbackMesh.material.opacity *= 0.9;
-          rightFeedbackMesh.material.opacity *= 0.9;
+        if (performance.now() - feedbackDisplayTime > 700) {
+          leftFeedbackMesh.material.opacity *= 0.85;
+          rightFeedbackMesh.material.opacity *= 0.85;
         }
 
-        if (aktifOk) {
+        // Eğer merkeze dönüş beklenmiyorsa oku yürüt (Seçim anında ok donar, karmaşayı engeller)
+        if (aktifOk && !merkezBekleniyor) {
           if (akissYonu === "sol") aktifOk.position.x -= okHizi;
           if (akissYonu === "sag") aktifOk.position.x += okHizi;
           if (akissYonu === "yukari") aktifOk.position.y += okHizi;
           if (akissYonu === "asagi") aktifOk.position.y -= okHizi;
 
-          if (Math.abs(aktifOk.position.x) > 2.5 || Math.abs(aktifOk.position.y) > 2) {
-            oynatSes("yanlis"); feedbackGoster("yanlis"); hacimliOkUret();
+          if (Math.abs(aktifOk.position.x) > 2.5 || Math.abs(aktifOk.position.y) > 1.8) {
+            oynatSes("yanlis"); feedbackGoster("yanlis"); 
+            merkezBekleniyor = true; // Kaçırılan okta da kafayı ortaya getirmesini iste
           }
-          kontrolEt();
         }
+        
+        kontrolEt();
 
         // Stereo Rendering
         renderer.setScissor(0, 0, window.innerWidth/2, window.innerHeight);
