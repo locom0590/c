@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="utf-8">
-    <title>Dual-Task Arrows - Invisible Center Zone VR</title>
+    <title>Dual-Task Arrows - 90 Degree Calibrated VR</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <style>
@@ -32,7 +32,7 @@
         <span style="color: #00D2FF; font-weight: bold;">NEON MAVİ OK:</span> Akış Yönüne Bak<br>
         <span style="color: #FF9F43; font-weight: bold;">NEON TURUNCU OK:</span> Ucun Gösterdiği Yöne Bak
       </p>
-      <button class="buton" onclick="oyunuBaslat()">EGZERSİZİ BAŞLAT</button>
+      <button class="buton" onclick="oyunuBaslat()">START</button>
     </div>
 
     <script>
@@ -47,9 +47,8 @@
       let dwellStartTime = 0;
       let sonAlgilananYon = "";
       
-      // Ok gövde+uç uzunluğu yaklaşık 0.45 birimdir. 1.5 katı cömert bir yarıçap eşiği sağlar.
       const MERKEZ_CEMBER_YARICAPI = 0.65; 
-      const BEKLEME_SURESI = 350; // Çember dışında kesintisiz kalma süresi (ms)
+      const BEKLEME_SURESI = 350; 
 
       let targetX = 0, targetY = 0;
       let currentX = 0, currentY = 0;
@@ -62,6 +61,7 @@
 
       function oynatSes(tip) {
         if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === 'suspended') { audioCtx.resume(); }
         let osc = audioCtx.createOscillator();
         let gain = audioCtx.createGain();
         osc.connect(gain); gain.connect(audioCtx.destination);
@@ -80,11 +80,30 @@
       }
 
       function oyunuBaslat() {
+        // AudioContext nesnesini doğrudan tıklama anında oluşturup kilitlenmesini engelliyoruz
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        
         if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
           DeviceOrientationEvent.requestPermission().then(state => {
-            if (state === 'granted') window.addEventListener('deviceorientation', handleOrientation);
+            if (state === 'granted') {
+              window.addEventListener('deviceorientation', handleOrientation);
+              calis();
+            } else {
+              alert("Jiroskop izni verilmedi. Oyun çalışamaz.");
+            }
+          }).catch(err => {
+            console.error(err);
+            // Bazı tarayıcılarda ilk tetiklemede hata düşerse güvenli başlatma alternatifi
+            window.addEventListener('deviceorientation', handleOrientation);
+            calis();
           });
-        } else { window.addEventListener('deviceorientation', handleOrientation); }
+        } else { 
+          window.addEventListener('deviceorientation', handleOrientation); 
+          calis();
+        }
+      }
+
+      function calis() {
         document.getElementById('girisEkranı').style.display = 'none';
         document.getElementById('vr-ayrac').style.display = 'block';
         init3D();
@@ -168,7 +187,6 @@
 
       function handleOrientation(e) {
         if (e.gamma === null || e.beta === null) return;
-        // 90 Derece Dik Duruş Ofseti
         let diklikAcisi = e.beta - 90; 
         targetX = -(diklikAcisi / 25) * 2.2; 
         targetY = (e.gamma / 22) * 1.8;
@@ -202,48 +220,42 @@
         aktifOk.position.set(sX, sY, -3.2); scene.add(aktifOk);
       }
 
-      // --- SADELEŞTİRİLMİŞ GÖRÜNMEZ ÇEMBER VE ZAMAN SAYAÇ MOTORU ---
       function kontrolEt() {
         if (!aktifOk) return;
 
-        // İmlecin merkez noktasından olan toplam uzaklığı (Hipotenüs hesabı)
         let merkezdenUzaklik = Math.sqrt(currentX * currentX + currentY * currentY);
 
-        // KURAL 1: İmleç merkezdeki görünmez çemberin içindeyse hiçbir tepki verme, sayacı sıfırla
         if (merkezdenUzaklik < MERKEZ_CEMBER_YARICAPI) {
           dwellStartTime = 0;
           sonAlgilananYon = "";
           return;
         }
 
-        // KURAL 2: İmleç çember dışındaysa hangi yönde olduğunu baskın eksene göre bul
-        let su AnkiYon = "";
+        let suAnkiYon = "";
         if (Math.abs(currentX) > Math.abs(currentY)) {
-          su AnkiYon = currentX > 0 ? "sag" : "sol";
+          suAnkiYon = currentX > 0 ? "sag" : "sol";
         } else {
-          su AnkiYon = currentY > 0 ? "yukari" : "asagi";
+          suAnkiYon = currentY > 0 ? "yukari" : "asagi";
         }
 
-        // KURAL 3: Belirlenen dış yönde kısa bir süre sabit beklenirse seçimi onayla
-        if (su AnkiYon !== "" && su AnkiYon === sonAlgilananYon) {
+        if (suAnkiYon !== "" && suAnkiYon === sonAlgilananYon) {
           if (dwellStartTime === 0) dwellStartTime = performance.now();
           
           let gecenSure = performance.now() - dwellStartTime;
           if (gecenSure > BEKLEME_SURESI) {
-            if (su AnkiYon === dogruYon) {
+            if (suAnkiYon === dogruYon) {
               skor += 10; guncelleSkorPaneli();
               oynatSes("dogru"); feedbackGoster("dogru");
-              cevapGeriBildirimi(su AnkiYon, 0x00FF66);
+              cevapGeriBildirimi(suAnkiYon, 0x00FF66);
             } else {
               oynatSes("yanlis"); feedbackGoster("yanlis");
-              cevapGeriBildirimi(su AnkiYon, 0xFF3333);
+              cevapGeriBildirimi(suAnkiYon, 0xFF3333);
             }
-            hacimliOkUret(); // Seçim yapıldığı an doğrudan yeni oka geç
+            hacimliOkUret(); 
           }
         } else {
-          // Yön değiştiyse veya yeni çember dışı çıkış yapıldıysa zamanlayıcıyı güncelle
           dwellStartTime = performance.now();
-          sonAlgilananYon = su AnkiYon;
+          sonAlgilananYon = suAnkiYon;
         }
       }
 
@@ -297,7 +309,6 @@
         
         kontrolEt();
 
-        // Stereo Rendering
         renderer.setScissor(0, 0, window.innerWidth/2, window.innerHeight);
         renderer.setViewport(0, 0, window.innerWidth/2, window.innerHeight);
         renderer.setScissorTest(true); renderer.render(scene, leftCamera);
