@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="utf-8">
-    <title>Dual-Task Arrows - 90 Degree Calibrated VR</title>
+    <title>Dual-Task Arrows - Invisible Center Zone VR</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <style>
@@ -42,12 +42,14 @@
       let okHizi = 0.0116; 
       let sonOkZamani = 0;
 
-      // Klinik Döngü Değişkenleri
+      // Temizlenmiş Yeni Algoritma Değişkenleri
       let skor = 0;
-      let hamleYapildi = false;      
-      let merkezBekleniyor = false;  
-      let okDogumZamani = 0;
-      const ANALIZ_SURESI = 450;     
+      let dwellStartTime = 0;
+      let sonAlgilananYon = "";
+      
+      // Ok gövde+uç uzunluğu yaklaşık 0.45 birimdir. 1.5 katı cömert bir yarıçap eşiği sağlar.
+      const MERKEZ_CEMBER_YARICAPI = 0.65; 
+      const BEKLEME_SURESI = 350; // Çember dışında kesintisiz kalma süresi (ms)
 
       let targetX = 0, targetY = 0;
       let currentX = 0, currentY = 0;
@@ -164,14 +166,10 @@
         scene.add(mesh);
       }
 
-      // --- MUTLAK 90 DERECE VR ORYANTASYON KALİBRASYONU ---
       function handleOrientation(e) {
         if (e.gamma === null || e.beta === null) return;
-        
-        // Telefon gözlük içinde tam dikey (landscape modunda 90 derece dik) durur.
-        // Bu yüzden beta ekseninden 90 çıkararak tam karşıya bakışı 0 kabul ediyoruz.
+        // 90 Derece Dik Duruş Ofseti
         let diklikAcisi = e.beta - 90; 
-
         targetX = -(diklikAcisi / 25) * 2.2; 
         targetY = (e.gamma / 22) * 1.8;
       }
@@ -179,8 +177,8 @@
       function hacimliOkUret() {
         if (aktifOk) scene.remove(aktifOk);
         
-        hamleYapildi = false;
-        okDogumZamani = performance.now();
+        dwellStartTime = 0;
+        sonAlgilananYon = "";
 
         const kural = Math.random() > 0.5 ? "mavi" : "turuncu";
         okRengi = kural === "mavi" ? 0x00D2FF : 0xFF9F43;
@@ -204,47 +202,48 @@
         aktifOk.position.set(sX, sY, -3.2); scene.add(aktifOk);
       }
 
+      // --- SADELEŞTİRİLMİŞ GÖRÜNMEZ ÇEMBER VE ZAMAN SAYAÇ MOTORU ---
       function kontrolEt() {
         if (!aktifOk) return;
 
-        // 1. AŞAMA: Hasta kafasını geniş nötr çembere geri getirene kadar yeni ok üretme
-        if (merkezBekleniyor) {
-          if (Math.abs(currentX) < 0.32 && Math.abs(currentY) < 0.32) {
-            merkezBekleniyor = false; 
-            hacimliOkUret();
-          }
-          return; 
+        // İmlecin merkez noktasından olan toplam uzaklığı (Hipotenüs hesabı)
+        let merkezdenUzaklik = Math.sqrt(currentX * currentX + currentY * currentY);
+
+        // KURAL 1: İmleç merkezdeki görünmez çemberin içindeyse hiçbir tepki verme, sayacı sıfırla
+        if (merkezdenUzaklik < MERKEZ_CEMBER_YARICAPI) {
+          dwellStartTime = 0;
+          sonAlgilananYon = "";
+          return;
         }
 
-        // 2. AŞAMA: Ok çıktıktan sonraki bilişsel analiz süresi (450ms) dolmadıysa hareketleri engelle
-        if (performance.now() - okDogumZamani < ANALIZ_SURESI) return;
-        if (hamleYapildi) return;
-
-        let algilananYon = "";
-        const limitX = 0.65, limitY = 0.55; 
-
-        // Baskın eksen filtresi
-        if (Math.abs(currentX) > limitX || Math.abs(currentY) > limitY) {
-          if (Math.abs(currentX) > Math.abs(currentY)) {
-            algilananYon = currentX > 0 ? "sag" : "sol";
-          } else {
-            algilananYon = currentY > 0 ? "yukari" : "asagi";
-          }
+        // KURAL 2: İmleç çember dışındaysa hangi yönde olduğunu baskın eksene göre bul
+        let su AnkiYon = "";
+        if (Math.abs(currentX) > Math.abs(currentY)) {
+          su AnkiYon = currentX > 0 ? "sag" : "sol";
+        } else {
+          su AnkiYon = currentY > 0 ? "yukari" : "asagi";
         }
 
-        // 3. AŞAMA: Net kafa hareketi algılandığı an beklemeden tetikle
-        if (algilananYon !== "") {
-          hamleYapildi = true; 
-          merkezBekleniyor = true; 
-
-          if (algilananYon === dogruYon) {
-            skor += 10; guncelleSkorPaneli();
-            oynatSes("dogru"); feedbackGoster("dogru");
-            cevapGeriBildirimi(algilananYon, 0x00FF66);
-          } else {
-            oynatSes("yanlis"); feedbackGoster("yanlis");
-            cevapGeriBildirimi(algilananYon, 0xFF3333);
+        // KURAL 3: Belirlenen dış yönde kısa bir süre sabit beklenirse seçimi onayla
+        if (su AnkiYon !== "" && su AnkiYon === sonAlgilananYon) {
+          if (dwellStartTime === 0) dwellStartTime = performance.now();
+          
+          let gecenSure = performance.now() - dwellStartTime;
+          if (gecenSure > BEKLEME_SURESI) {
+            if (su AnkiYon === dogruYon) {
+              skor += 10; guncelleSkorPaneli();
+              oynatSes("dogru"); feedbackGoster("dogru");
+              cevapGeriBildirimi(su AnkiYon, 0x00FF66);
+            } else {
+              oynatSes("yanlis"); feedbackGoster("yanlis");
+              cevapGeriBildirimi(su AnkiYon, 0xFF3333);
+            }
+            hacimliOkUret(); // Seçim yapıldığı an doğrudan yeni oka geç
           }
+        } else {
+          // Yön değiştiyse veya yeni çember dışı çıkış yapıldıysa zamanlayıcıyı güncelle
+          dwellStartTime = performance.now();
+          sonAlgilananYon = su AnkiYon;
         }
       }
 
@@ -268,7 +267,7 @@
         if (!oyunAktif) return;
         requestAnimationFrame(animate);
 
-        if ((time - sonOkZamani > 8000 || !aktifOk) && !merkezBekleniyor) { 
+        if (time - sonOkZamani > 8500 || !aktifOk) { 
           hacimliOkUret(); 
           sonOkZamani = time; 
         }
@@ -284,7 +283,7 @@
           rightFeedbackMesh.material.opacity *= 0.85;
         }
 
-        if (aktifOk && !merkezBekleniyor) {
+        if (aktifOk) {
           if (akissYonu === "sol") aktifOk.position.x -= okHizi;
           if (akissYonu === "sag") aktifOk.position.x += okHizi;
           if (akissYonu === "yukari") aktifOk.position.y += okHizi;
@@ -292,18 +291,17 @@
 
           if (Math.abs(aktifOk.position.x) > 2.5 || Math.abs(aktifOk.position.y) > 1.8) {
             oynatSes("yanlis"); feedbackGoster("yanlis"); 
-            merkezBekleniyor = true; 
+            hacimliOkUret();
           }
         }
         
         kontrolEt();
 
-        // Sol Göz
+        // Stereo Rendering
         renderer.setScissor(0, 0, window.innerWidth/2, window.innerHeight);
         renderer.setViewport(0, 0, window.innerWidth/2, window.innerHeight);
         renderer.setScissorTest(true); renderer.render(scene, leftCamera);
 
-        // Sağ Göz
         renderer.setScissor(window.innerWidth/2, 0, window.innerWidth/2, window.innerHeight);
         renderer.setViewport(window.innerWidth/2, 0, window.innerWidth/2, window.innerHeight);
         renderer.setScissorTest(true); renderer.render(scene, rightCamera);
