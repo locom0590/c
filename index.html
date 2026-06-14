@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="utf-8">
-    <title>Dual-Task Arrows - Enhanced VR</title>
+    <title>Dual-Task Arrows - Clinical Feedback VR</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <style>
@@ -43,19 +43,53 @@
       let dogruYon = "";
       let akissYonu = "";
       let okRengi = "";
-      let okHizi = 0.035;
+      
+      // Hız eski değerin tam 3'te 1'ine düşürüldü (0.035 / 3)
+      let okHizi = 0.0116; 
       let sonOkZamani = 0;
 
-      // İmleç (Cursor) nesneleri (Her iki göz ekranı için ayrı çizilecek)
+      // Klinik Geri Bildirim ve Skor Değişkenleri
+      let skor = 0;
+      let leftScoreText, rightScoreText;
+      let leftFeedbackMesh, rightFeedbackMesh;
+      let feedbackGosterimZamani = 0;
+
       let leftCursor, rightCursor;
-      
-      // Jiroskop hassasiyeti ve sarsıntı önleyici yumuşatma katsayısı
       let targetX = 0, targetY = 0;
       let currentX = 0, currentY = 0;
       const yumusatma = 0.15; 
 
+      // Tarayıcı içi yapay ses motoru (Web Audio API)
+      let audioCtx = null;
+
+      function oynatSes(tip) {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        let osc = audioCtx.createOscillator();
+        let gain = audioCtx.createGain();
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+
+        if (tip === "dogru") {
+          // İnce ve pozitif iki kademeli bip sesi
+          osc.type = "sine";
+          osc.frequency.setValueAtTime(587.33, audioCtx.currentTime); // D5 notası
+          osc.frequency.setValueAtTime(880, audioCtx.currentTime + 0.08); // A5 notası
+          gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.25);
+          osc.start();
+          osc.stop(audioCtx.currentTime + 0.25);
+        } else {
+          // Kalın ve tok hata sesi
+          osc.type = "sawtooth";
+          osc.frequency.setValueAtTime(120, audioCtx.currentTime); 
+          gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+          osc.start();
+          osc.stop(audioCtx.currentTime + 0.3);
+        }
+      }
+
       function oyunuBaslat() {
-        // İzin mekanizması (iOS 13+ cihazlarda jiroskop erişimi için kullanıcı onayı şarttır)
         if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
           DeviceOrientationEvent.requestPermission()
             .then(permissionState => {
@@ -81,14 +115,12 @@
 
       function init3D() {
         scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x111a22); // Derin antrasit klinik arka plan
+        scene.background = new THREE.Color(0x111a22); 
 
-        // Okların ekrandan taşmasını önlemek için Görüş Açısı (FOV) 60'tan 70'e çıkarıldı
         const aspect = (window.innerWidth / 2) / window.innerHeight;
         leftCamera = new THREE.PerspectiveCamera(70, aspect, 0.1, 100);
         rightCamera = new THREE.PerspectiveCamera(70, aspect, 0.1, 100);
         
-        // Kameralar merkez eksende, derinlik okları daha rahat görecek şekilde optimize edildi
         leftCamera.position.set(-0.06, 0, 0.5);
         rightCamera.position.set(0.06, 0, 0.5);
 
@@ -96,35 +128,99 @@
         renderer.setSize(window.innerWidth, window.innerHeight);
         document.body.appendChild(renderer.domElement);
 
-        // Işıklandırma (Neon renklerin parlamasını destekleyen güçlü beyaz ışık)
         const light = new THREE.DirectionalLight(0xffffff, 1.2);
         light.position.set(0, 4, 6).normalize();
         scene.add(light);
         scene.add(new THREE.AmbientLight(0x555555));
 
-        // CEVAP HEDEFLERİ (YENİLENMİŞ KLİNİK PANEL YERLEŞİMİ - Kadraja Tam Sığdırıldı)
+        // CEVAP HEDEFLERİ
         createTarget(0, 1.4, -3.5, "yukari", 0x7F8C8D);
         createTarget(0, -1.4, -3.5, "asagi", 0x7F8C8D);
         createTarget(-1.8, 0, -3.5, "sol", 0x7F8C8D);
         createTarget(1.8, 0, -3.5, "sag", 0x7F8C8D);
 
-        // --- BAŞ HAREKETLERİNİ TAKİP EDEN PARLAK VR İMLEÇLERİ (RETICLE) ---
-        // Sol göz imleci
+        // BAŞ HAREKETLERİNİ TAKİP EDEN PARLAK VR İMLEÇLERİ
         const cursorGeo = new THREE.RingGeometry(0.02, 0.035, 32);
         const cursorMat = new THREE.MeshBasicMaterial({ color: 0x00FFCC, side: THREE.DoubleSide, depthTest: false });
         leftCursor = new THREE.Mesh(cursorGeo, cursorMat);
-        leftCursor.renderOrder = 999; // Her şeyin önünde çizilmesi için
+        leftCursor.renderOrder = 999;
         scene.add(leftCursor);
 
-        // Sağ göz imleci
         rightCursor = leftCursor.clone();
         scene.add(rightCursor);
 
-        // PC Geliştirici Testi için Mouse Desteği
+        // --- SKOR VE GÖRSEL GERİ BİLDİRİM (TIK / ÇARPI) GEOMETRİLERİ ---
+        // Kanvas tabanlı yazı dokusu üretici (Skor Paneli İçin)
+        function createScoreTexture(skorDegeri) {
+          let canvas = document.createElement('canvas');
+          canvas.width = 256; canvas.height = 64;
+          let ctx = canvas.getContext('2d');
+          ctx.fillStyle = '#2C3E50'; ctx.fillRect(0, 0, 256, 64);
+          ctx.fillStyle = '#FFFFFF'; ctx.font = 'Bold 32px sans-serif';
+          ctx.textAlign = 'center'; ctx.fillText('SKOR: ' + skorDegeri, 128, 44);
+          return new THREE.CanvasTexture(canvas);
+        }
+
+        const scoreGeo = new THREE.PlaneGeometry(0.6, 0.15);
+        leftScoreText = new THREE.Mesh(scoreGeo, new THREE.MeshBasicMaterial({ map: createScoreTexture(0) }));
+        leftScoreText.position.set(-0.06, 1.9, -3);
+        scene.add(leftScoreText);
+
+        rightScoreText = leftScoreText.clone();
+        rightScoreText.position.set(0.06, 1.9, -3);
+        scene.add(rightScoreText);
+
+        // Tik (✓) ve Çarpı (✗) için Görsel Doku Hazırlığı
+        function createFeedbackTexture(tur) {
+          let canvas = document.createElement('canvas');
+          canvas.width = 128; canvas.height = 128;
+          let ctx = canvas.getContext('2d');
+          ctx.clearRect(0, 0, 128, 128);
+          ctx.font = 'Bold 100px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+          if (tur === "dogru") { ctx.fillStyle = '#2ECC71'; ctx.fillText('✓', 64, 64); }
+          else { ctx.fillStyle = '#E74C3C'; ctx.fillText('✗', 64, 64); }
+          let tex = new THREE.CanvasTexture(canvas);
+          return tex;
+        }
+
+        this.texDogru = createFeedbackTexture("dogru");
+        this.texYanlis = createFeedbackTexture("yanlis");
+
+        const feedbackGeo = new THREE.PlaneGeometry(0.4, 0.4);
+        leftFeedbackMesh = new THREE.Mesh(feedbackGeo, new THREE.MeshBasicMaterial({ map: this.texDogru, transparent: true, opacity: 0 }));
+        leftFeedbackMesh.position.set(-0.06, 0, -2.5);
+        scene.add(leftFeedbackMesh);
+
+        rightFeedbackMesh = leftFeedbackMesh.clone();
+        rightFeedbackMesh.position.set(0.06, 0, -2.5);
+        scene.add(rightFeedbackMesh);
+
         window.addEventListener('mousemove', (e) => {
           targetX = ((e.clientX / window.innerWidth) * 2 - 1) * 2.2;
           targetY = (-(e.clientY / window.innerHeight) * 2 + 1) * 1.8;
         });
+      }
+
+      function guncelleSkorPaneli() {
+        function createScoreTexture(skorDegeri) {
+          let canvas = document.createElement('canvas');
+          canvas.width = 256; canvas.height = 64;
+          let ctx = canvas.getContext('2d');
+          ctx.fillStyle = '#2C3E50'; ctx.fillRect(0, 0, 256, 64);
+          ctx.fillStyle = '#FFFFFF'; ctx.font = 'Bold 32px sans-serif';
+          ctx.textAlign = 'center'; ctx.fillText('SKOR: ' + skorDegeri, 128, 44);
+          return new THREE.CanvasTexture(canvas);
+        }
+        let yeniDoku = createScoreTexture(skor);
+        leftScoreText.material.map = yeniDoku; leftScoreText.material.needsUpdate = true;
+        rightScoreText.material.map = yeniDoku; rightScoreText.material.needsUpdate = true;
+      }
+
+      function tetikleGeriBildirim(durum) {
+        let seciliDoku = durum === "dogru" ? this.texDogru : this.texYanlis;
+        leftFeedbackMesh.material.map = seciliDoku; leftFeedbackMesh.material.opacity = 1; leftFeedbackMesh.material.needsUpdate = true;
+        rightFeedbackMesh.material.map = seciliDoku; rightFeedbackMesh.material.opacity = 1; rightFeedbackMesh.material.needsUpdate = true;
+        feedbackGosterimZamani = performance.now();
       }
 
       function createTarget(x, y, z, yon, renk) {
@@ -138,9 +234,6 @@
 
       function handleOrientation(event) {
         if (!event.gamma || !event.beta) return;
-        
-        // Jiroskop verilerini ekran koordinat sınırlarına (X: -2.2 ile 2.2, Y: -1.8 ile 1.8) ölçekleme
-        // Telefon yatay (landscape) tutulacağı için beta ve gamma yönleri optimize edilmiştir
         targetX = (event.gamma / 22) * 2.2; 
         targetY = ((event.beta - 65) / 20) * 1.8;
       }
@@ -152,7 +245,6 @@
         }
 
         const kuralTipi = Math.random() > 0.5 ? "mavi" : "turuncu";
-        // PARLAK NEON RENKLER AKTİF EDİLDİ
         okRengi = kuralTipi === "mavi" ? 0x00D2FF : 0xFF9F43;
 
         const yonler = ["sol", "sag", "yukari", "asagi"];
@@ -163,26 +255,22 @@
 
         aktifOk = new THREE.Group();
 
-        // Kalın ve Hacimli Gövde
         const govdeGeo = new THREE.BoxGeometry(0.25, 0.45, 0.25);
         const mat = new THREE.MeshStandardMaterial({ color: okRengi, roughness: 0.2, metalness: 0.1 });
         const govdeMesh = new THREE.Mesh(govdeGeo, mat);
         govdeMesh.position.y = -0.15;
         aktifOk.add(govdeMesh);
 
-        // Hacimli Piramitsel Uç (Daha belirgin hale getirildi)
         const ucGeo = new THREE.ConeGeometry(0.28, 0.35, 4);
         const ucMesh = new THREE.Mesh(ucGeo, mat);
         ucMesh.position.y = 0.25;
         ucMesh.rotation.y = Math.PI / 4; 
         aktifOk.add(ucMesh);
 
-        // Ucun Dönüş Rotasyonları
         if (ucYonu === "sol") aktifOk.rotation.z = Math.PI / 2;
         if (ucYonu === "sag") aktifOk.rotation.z = -Math.PI / 2;
         if (ucYonu === "asagi") aktifOk.rotation.z = Math.PI;
 
-        // Okların Görüş Alanından Taşmasını Engelleyen Doğum Noktaları (Görünür sınırlar içinde)
         let startX = 0, startY = 0;
         if (akissYonu === "sol") startX = 2.0;
         if (akissYonu === "sag") startX = -2.0;
@@ -195,17 +283,22 @@
 
       function kontrolEt() {
         let clockYon = "";
-        // İmleç panellerin üzerine geldi mi kontrolü
         if (currentY > 0.9 && Math.abs(currentX) < 0.7) clockYon = "yukari";
         else if (currentY < -0.9 && Math.abs(currentX) < 0.7) clockYon = "asagi";
         else if (currentX < -1.1 && Math.abs(currentY) < 0.7) clockYon = "sol";
         else if (currentX > 1.1 && Math.abs(currentY) < 0.7) clockYon = "sag";
 
         if (clockYon === dogruYon) {
-          cevapGeriBildirimi(clockYon, 0x00FF66); // Parlak Yeşil Geri Bildirim
+          skor += 10;
+          guncelleSkorPaneli();
+          tetikleGeriBildirim("dogru");
+          oynatSes("dogru");
+          cevapGeriBildirimi(clockYon, 0x00FF66); 
           hacimliOkUret();
         } else if (clockYon !== "" && clockYon !== dogruYon) {
-          cevapGeriBildirimi(clockYon, 0xFF3333); // Parlak Kırmızı Geri Bildirim
+          tetikleGeriBildirim("yanlis");
+          oynatSes("yanlis");
+          cevapGeriBildirimi(clockYon, 0xFF3333); 
           hacimliOkUret();
         }
       }
@@ -225,18 +318,22 @@
         if (!oyunAktif) return;
         requestAnimationFrame(animate);
 
-        if (time - sonOkZamani > 4500 || !aktifOk) {
+        if (time - sonOkZamani > 6000 || !aktifOk) {
           hacimliOkUret();
           sonOkZamani = time;
         }
 
-        // Hastanın baş hareketini (İmleci) sarsıntıları engellemek için yumuşatarak kaydır
         currentX += (targetX - currentX) * yumusatma;
         currentY += (targetY - currentY) * yumusatma;
 
-        // İmleçleri kameraların tam önüne hizalayarak eş zamanlı hareket ettir
         leftCursor.position.set(currentX - 0.06, currentY, -2.8);
         rightCursor.position.set(currentX + 0.06, currentY, -2.8);
+
+        // Görsel geri bildirimi (Tik/Çarpi) 600ms sonra yumuşatarak gizle
+        if (time - feedbackGosterimZamani > 600) {
+          leftFeedbackMesh.material.opacity *= 0.8;
+          rightFeedbackMesh.material.opacity *= 0.8;
+        }
 
         if (aktifOk) {
           if (akissYonu === "sol") aktifOk.position.x -= okHizi;
@@ -244,22 +341,22 @@
           if (akissYonu === "yukari") aktifOk.position.y += okHizi;
           if (akissYonu === "asagi") aktifOk.position.y -= okHizi;
 
-          // Ok sınır dışına çıktığında yok etme mesafeleri daraltıldı (Tamamen görünür kalması için)
           if (Math.abs(aktifOk.position.x) > 2.4 || Math.abs(aktifOk.position.y) > 1.8) {
+            tetikleGeriBildirim("yanlis");
+            oynatSes("yanlis"); // Oku kaçırma durumu da klinik olarak cezalandırılır
             hacimliOkUret();
           }
           kontrolEt();
         }
 
-        // --- STEREO DUAL VIEWPORT RENDERING ---
-        // Sol Göz Çizimi & İmleci
+        // Sol Göz Çizimi
         leftCursor.visible = true; rightCursor.visible = false;
         renderer.setScissor(0, 0, window.innerWidth / 2, window.innerHeight);
         renderer.setViewport(0, 0, window.innerWidth / 2, window.innerHeight);
         renderer.setScissorTest(true);
         renderer.render(scene, leftCamera);
 
-        // Sağ Göz Çizimi & İmleci
+        // Sağ Göz Çizimi
         leftCursor.visible = false; rightCursor.visible = true;
         renderer.setScissor(window.innerWidth / 2, 0, window.innerWidth / 2, window.innerHeight);
         renderer.setViewport(window.innerWidth / 2, 0, window.innerWidth / 2, window.innerHeight);
